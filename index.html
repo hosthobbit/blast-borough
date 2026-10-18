@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Blast Borough</title>
+    <meta name="author" content="Host Hobbit Ltd" />
+    <meta name="description" content="Bomb battles in a neighbourhood at dusk. Play solo against bots, two players on one keyboard, or send friends a link. Settle it in two minutes." />
+    <meta name="theme-color" content="#1b1430" />
+    <meta property="og:title" content="Blast Borough" />
+    <meta property="og:description" content="Send a link. Settle it in two minutes. Free bomb battles in your browser: solo, local or online with friends." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hosthobbit.github.io/blast-borough/" />
+    <meta property="og:image" content="https://hosthobbit.github.io/blast-borough/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <script type="module" crossorigin src="./assets/index-BFt1c3PS.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CPGwLvsm.css">
+  </head>
+  <body>
+    <div id="app">
+      <main id="play" aria-label="Arena">
+        <div id="hud" hidden></div>
+        <div id="pad" class="touch-control" aria-hidden="true">
+          <span class="arrow up"></span><span class="arrow down"></span><span class="arrow left"></span><span class="arrow right"></span>
+        </div>
+        <div id="stage"></div>
+        <button id="bombBtn" class="touch-control" aria-label="Drop bomb" tabindex="-1"><span>BOMB</span></button>
+      </main>
+      <div id="screens"></div>
+      <div id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </body>
+</html>
