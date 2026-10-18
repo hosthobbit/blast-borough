@@ -219,3 +219,34 @@ body.touch .desktop-only-note { display: block; color: #ffd0a0; font-weight: 700
   .btn { padding: 9px 12px; font-size: 16px; }
   .menu { gap: 7px; }
 }
+
+/* ------------------------------------------------------------------ sharing + credit */
+.share { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; margin-top: 12px; }
+.share-label { width: 100%; text-align: center; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.share-btn { appearance: none; border: 0; cursor: pointer; text-decoration: none; font-weight: 800; font-size: 13px; padding: 7px 11px; border-radius: 99px; color: #fff; background: #4a3a7a; }
+.share-btn.facebook { background: #1877f2; }
+.share-btn.whatsapp { background: #1fa855; }
+.share-btn.x { background: #111; border: 1px solid rgba(255,255,255,0.3); }
+.share-btn.native { background: linear-gradient(180deg, #ffe08a, #ffad4d); color: #2a1030; }
+.share-btn:hover { filter: brightness(1.12); }
+.credit { margin-top: 12px; text-align: center; font-size: 13px; color: var(--muted); }
+.credit a { color: var(--gold); font-weight: 800; text-decoration: none; }
+.credit a:hover { text-decoration: underline; }
+.nudge { position: absolute; right: calc(16px + var(--safe-r)); bottom: calc(16px + var(--safe-b)); width: min(340px, calc(100% - 32px)); z-index: 6;
+  background: var(--panel); border: 1px solid var(--gold); border-radius: 18px; padding: 14px 16px; box-shadow: 0 16px 40px rgba(0,0,0,0.5); text-align: center; animation: fadein 300ms ease-out; }
+.nudge p { color: var(--muted); font-size: 14px; margin: 6px 0 4px; line-height: 1.4; }
+.nudge .btn { margin: 10px auto 0; }
+@media (max-height: 520px) { .share { margin-top: 8px; } .credit { margin-top: 6px; font-size: 12px; } .nudge { display: none; } }
+
+/* ------------------------------------------------------------------ leaderboard */
+.board { display: grid; gap: 5px; margin: 12px 0; max-height: min(52vh, 520px); overflow-y: auto; }
+.board-row { display: grid; grid-template-columns: 34px 1fr auto; grid-template-areas: "rank name pts" "rank detail detail"; column-gap: 10px; align-items: center; padding: 7px 12px; border-radius: 12px; background: rgba(255,255,255,0.05); }
+.board-row .rank { grid-area: rank; font-weight: 900; font-size: 18px; color: var(--muted); text-align: center; }
+.board-row .name { grid-area: name; }
+.board-row .pts { grid-area: pts; color: var(--gold); font-variant-numeric: tabular-nums; }
+.board-row .detail { grid-area: detail; font-size: 12px; color: var(--muted); }
+.board-row.top .rank { color: var(--gold); }
+.board-row.me { outline: 2px solid var(--gold); }
+.submit-row { margin: 10px 0 2px; }
+.submit-row input { flex: 1; min-width: 0; }
+#lbStatus a { color: var(--gold); }

@@ -13,7 +13,7 @@ A grid-based bomb battle in a colourful neighbourhood at dusk. Drop bombs, blast
 - **Play Solo** against three bots: Easy, Normal or Hard
 - **Local Multiplayer**: two players on one keyboard, plus optional bots
 - **Online Multiplayer**: private rooms for 2 to 8 players. Create a room, send the invite link, and play. Bots fill the empty spots
-- **Daily Challenge**: the same arena for everyone on a given day, with your personal best
+- **Daily Challenge**: the same arena for everyone each day, with a **public leaderboard** (today and all time)
 - **Phones and tablets**: a touch D-pad and a big bomb button
 
 Everything you see and hear was made for this game, in code: the characters, the neighbourhood, the sound effects and the music. No image or audio files, nothing borrowed.
@@ -23,6 +23,7 @@ Everything you see and hear was made for this game, in code: the characters, the
 | ![Title screen](docs/screenshots/title.png) | ![How to play](docs/screenshots/how-to-play.png) |
 | ![Online lobby with invite link, ready states and bots](docs/screenshots/online-lobby.png) | ![An online match](docs/screenshots/online-match.png) |
 | ![Match results](docs/screenshots/results.png) | ![Daily challenge result](docs/screenshots/daily.png) |
+| ![Public Daily Challenge leaderboard](docs/screenshots/leaderboard.png) | |
 
 ![On a phone: touch pad and bomb button beside the arena](docs/screenshots/phone.png)
 
@@ -50,6 +51,30 @@ Everything you see and hear was made for this game, in code: the characters, the
 
 - Rounds last about two minutes. With **30 seconds left, sudden death** begins: barriers drop from the edges inwards until the arena is closed.
 - Last player standing wins the round. If everyone left is caught at the same moment, it's a **draw**.
+
+## Daily Challenge leaderboard
+
+Every day (UTC) everyone gets the same arena, spawns and bots. Play one round and score points:
+
+- survival time
+- crates you blast
+- power-ups you grab
+- knockouts, 150 each
+- a big bonus for winning, worth more the quicker you win
+
+Then put your name on the public leaderboard. **Leaderboard** on the title screen shows today's top 20 and the best scores of all time.
+
+The scores are kept by [`signal/blast-scores.php`](signal/blast-scores.php), live on hosthobbit.com:
+
+- It recalculates every score from the round's stats, so typed-in numbers are rejected.
+- It caps impossible stats.
+- It only accepts today's (or just-finished yesterday's) challenge.
+- It keeps one entry per name per day, your best.
+- It filters rude names and rate-limits.
+
+## Sharing
+
+Share buttons for Facebook, WhatsApp and X, plus your phone's own share menu and Copy link, are on the title, results and daily screens. Players who've finished a match are shown a friendly "share it with your friends" card a few times, until they share. Sharing is always optional and never blocks play, as Facebook's rules require.
 
 ## Online play
 
@@ -99,16 +124,17 @@ Copy `.env.example` to `.env`. Nothing in it is secret.
 | Variable | Used by | Default | Meaning |
 | --- | --- | --- | --- |
 | `VITE_SIGNAL_URL` | game (build time) | `https://hosthobbit.com/games-api/blast-signal.php` | The introductions script for peer-to-peer rooms |
+| `VITE_SCORES_URL` | game (build time) | `https://hosthobbit.com/games-api/blast-scores.php` | The public Daily Challenge leaderboard |
 | `VITE_SERVER_URL` | game (build time) | unset | If set (e.g. `wss://blast.example.com`), online play uses this dedicated server instead of peer-to-peer |
 | `PORT`, `ALLOWED_ORIGINS`, `MAX_ROOMS` | dedicated server | `8787`, any, `200` | Port, allowed page origins, room cap |
 
 ### Hosting the game
 
-`npm run build`, then upload `dist/` to any static host. It works from any path. The live version is on GitHub Pages: the `gh-pages` branch is the contents of `dist/` plus an empty `.nojekyll` file.
+`npm run build`, then upload `dist/` to any static host. The leaderboard and the online introductions use `VITE_SCORES_URL` and `VITE_SIGNAL_URL` (both default to hosthobbit.com). It works from any path. The live version is on GitHub Pages: the `gh-pages` branch is the contents of `dist/` plus an empty `.nojekyll` file.
 
-### Hosting the introductions script
+### Hosting the PHP scripts (introductions and leaderboard)
 
-Copy [`signal/blast-signal.php`](signal/blast-signal.php) to any PHP 8 host with SQLite, e.g. `public_html/games-api/`.
+Copy [`signal/blast-signal.php`](signal/blast-signal.php) and [`signal/blast-scores.php`](signal/blast-scores.php) to any PHP 8 host with SQLite, e.g. `public_html/games-api/`.
 
 - It keeps a small SQLite file outside the web root, in `~/game-scores/`, or `BLAST_SIGNAL_DIR` if set.
 - It cleans up after itself: rooms vanish 2 minutes after their host stops checking in.
@@ -156,7 +182,7 @@ client/        the game in the browser
   net.ts           online play: inputs, prediction for your own player, smoothing for everyone else
   audio.ts         synthesised sound effects and music
 server/        optional dedicated Node.js server
-signal/        the PHP introductions script
+signal/        PHP: online introductions + Daily Challenge leaderboard
 tests/         Vitest
 e2e/           headless browser tests and README screenshots
 ```
@@ -183,7 +209,7 @@ e2e/           headless browser tests and README screenshots
   - The host leaving.
   - Clear errors when the room service is unreachable or a code is wrong.
   - The phone layout in landscape and portrait, with touch steering and bombing.
-  - The daily challenge.
+  - The daily challenge, including submitting to the public leaderboard and finding the entry there.
   - Keyboard-only menus.
   - The run fails on any browser console error.
   - The online tests serve `signal/blast-signal.php` with a local `php` (set `PHP_BIN` if it isn't at `~/.local/opt/php/php`), and use the system Chromium (`CHROME=/path` to override).
@@ -193,7 +219,7 @@ e2e/           headless browser tests and README screenshots
 - Tested in desktop Chromium and a phone emulator, not yet on real phones and tablets. Performance on older phones is unknown.
 - Peer-to-peer rooms depend on the host's browser and connection, and some networks block direct connections (see above).
 - No reconnection: a player who drops out is replaced by a bot for the rest of that match.
-- Daily challenge scores are kept on each device only. There's no global leaderboard.
+- Leaderboard scores are checked for consistency, not replayed, so a determined cheat could still craft a plausible score.
 - Two-player local mode needs a keyboard, so it's for computers.
 - Ideas for later: a map editor, cosmetic unlocks, a revenge mode.
 

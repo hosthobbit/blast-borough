@@ -53,7 +53,7 @@ const screen = (page) => page.evaluate(() => window.__bb.screen());
 const signalDir = mkdtempSync(join(tmpdir(), "bb-signal-"));
 const signalServer = await start(PHP, ["-S", `127.0.0.1:${SIGNAL_PORT}`, "-t", "signal"], { BLAST_SIGNAL_DIR: signalDir }, /Development Server|started/);
 const server = await start("npx", ["tsx", "server/index.ts"], { PORT: String(SERVER_PORT) }, /listening/);
-const vite = await start("npx", ["vite", "--port", String(WEB_PORT), "--strictPort"], { VITE_SIGNAL_URL: `http://127.0.0.1:${SIGNAL_PORT}/blast-signal.php`, VITE_SERVER_URL: "" }, /Local:/);
+const vite = await start("npx", ["vite", "--port", String(WEB_PORT), "--strictPort"], { VITE_SIGNAL_URL: `http://127.0.0.1:${SIGNAL_PORT}/blast-signal.php`, VITE_SCORES_URL: `http://127.0.0.1:${SIGNAL_PORT}/blast-scores.php`, VITE_SERVER_URL: "" }, /Local:/);
 const browser = await launch();
 
 async function newPage(label, opts = {}) {
@@ -276,6 +276,15 @@ try {
     assert(text.includes(`Daily Challenge · ${date}`), "result should name the date");
     const best = await page.evaluate((d) => localStorage.getItem(`bb.daily.${d}`), date);
     assert(best && JSON.parse(best).score >= 0, "personal best should be saved");
+    // public leaderboard: submit, then find it on today's board
+    await page.fill("#lbName", "Tester");
+    await page.click("[data-submit]");
+    await page.waitForFunction(() => /#\d+ today/.test(document.querySelector("#lbStatus")?.textContent ?? ""), null, { timeout: 15000 });
+    await page.click("#lbStatus [data-view]");
+    await page.waitForSelector(".board-row", { timeout: 15000 });
+    assert((await page.textContent(".board")).includes("Tester"), "the score should be on today's leaderboard");
+    await sleep(800);
+    await page.screenshot({ path: `${OUT}/leaderboard.png` });
     await page.screenshot({ path: `${OUT}/daily.png` });
     await page.context().close();
   });

@@ -17,6 +17,8 @@ import { webSocketTransport } from "./p2p/transport.js";
 const SERVER_URL = import.meta.env.VITE_SERVER_URL as string | undefined;
 let p2pHost: P2PHost | null = null;
 import { saveSettings, settings, storageGet, storageSet } from "./settings.js";
+import { type BoardEntry, fetchBoard, submitDaily } from "./leaderboard.js";
+import { credit, notePlayedMatch, nudged, shareRow, shouldNudge, wireShare } from "./share.js";
 
 // ------------------------------------------------------------------------------------------
 // environment
@@ -106,7 +108,7 @@ function startAttract() {
 // ------------------------------------------------------------------------------------------
 // screens
 
-type Screen = "title" | "solo" | "local" | "online" | "lobby" | "howto" | "settings" | "daily" | "results" | "pause" | "none";
+type Screen = "board" | "title" | "solo" | "local" | "online" | "lobby" | "howto" | "settings" | "daily" | "results" | "pause" | "none";
 let current: Screen = "none";
 let back: (() => void) | null = null;
 
@@ -114,6 +116,7 @@ function show(name: Screen, html: string, opts: { clear?: boolean; focus?: strin
   current = name;
   back = opts.onBack ?? null;
   screens.innerHTML = html ? `<section class="screen ${opts.clear ? "clear" : ""}" data-screen="${name}">${html}</section>` : "";
+  wireShare(screens, toast);
   const target = opts.focus ? screens.querySelector<HTMLElement>(opts.focus) : screens.querySelector<HTMLElement>("button, input");
   target?.focus({ preventScroll: true });
 }
@@ -149,19 +152,39 @@ function showTitle() {
         <button class="btn" data-go="solo">Play Solo</button>
         <button class="btn" data-go="local">Local Multiplayer</button>
         <button class="btn" data-go="online">Online Multiplayer</button>
-        <button class="btn alt" data-go="daily">Daily Challenge</button>
+        <div class="menu two">
+          <button class="btn alt" data-go="daily">Daily Challenge</button>
+          <button class="btn alt" data-go="board">Leaderboard</button>
+        </div>
         <div class="menu two">
           <button class="btn alt small" data-go="howto">How to Play</button>
           <button class="btn alt small" data-go="settings">Settings</button>
         </div>
       </div>
+      ${shareRow("Fancy a bomb battle? Free, in your browser, no download: Blast Borough", { label: "Share the game" })}
+      ${credit()}
     </div>`);
+  if (shouldNudge()) {
+    nudged();
+    const card = document.createElement("div");
+    card.className = "nudge";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", "Share Blast Borough");
+    card.innerHTML = `<b>Enjoying Blast Borough?</b><p>It's free and made by a small UK company. Sharing it with your friends really helps, and gives you more people to play!</p>
+      ${shareRow("I've been playing Blast Borough: free bomb battles in your browser. Fancy a game?")}
+      <button class="btn ghost small" data-nudge-close>Maybe later</button>`;
+    screens.querySelector(".screen")?.appendChild(card);
+    wireShare(card, toast);
+    card.querySelector("[data-nudge-close]")!.addEventListener("click", () => card.remove());
+    card.querySelectorAll(".share-btn").forEach((b) => b.addEventListener("click", () => setTimeout(() => card.remove(), 300)));
+  }
   on("[data-go]", "click", (e) => {
     const go = (e.currentTarget as HTMLElement).dataset.go;
     if (go === "solo") showSolo();
     if (go === "local") showLocal();
     if (go === "online") showOnline();
     if (go === "daily") showDaily();
+    if (go === "board") showBoard(showTitle);
     if (go === "howto") showHowTo(showTitle);
     if (go === "settings") showSettings(showTitle);
   });
@@ -462,6 +485,7 @@ document.addEventListener("visibilitychange", () => {
 
 function showResults(score: MatchScore, s: GameState) {
   if (!inMatch) return;
+  notePlayedMatch();
   keyboard.active = false;
   const w = score.winner;
   const order = s.players.map((p) => p.id).sort((a, b) => score.wins[b] - score.wins[a]);
@@ -478,6 +502,8 @@ function showResults(score: MatchScore, s: GameState) {
         <button class="btn alt" data-menu>${isOnline ? "Leave room" : "Main menu"}</button>
       </div>
       ${isOnline && online?.isHost() ? `<button class="btn ghost small" data-lobby style="margin-top:10px;width:100%">Back to lobby</button>` : ""}
+      ${shareRow(brag(score, w), { label: "Share" })}
+      ${credit()}
     </div>`, { onBack: leaveMatch });
   on("[data-rematch]", "click", () => {
     if (isOnline) { online?.send({ t: "start" }); return; }
@@ -487,6 +513,43 @@ function showResults(score: MatchScore, s: GameState) {
   });
   on("[data-lobby]", "click", () => online?.send({ t: "lobby" }));
   on("[data-menu]", "click", leaveMatch);
+}
+
+function brag(score: MatchScore, w: number): string {
+  const me = matchKind === "online" ? online?.youSlot ?? -1 : 0;
+  if (matchKind !== "local" && w === me) return `I just won ${score.wins[w]}-${Math.max(...score.wins.filter((_, i) => i !== w))} at Blast Borough! Think you can beat me?`;
+  return "Just had a brilliant bomb battle in Blast Borough. Free in your browser: fancy a game?";
+}
+
+// public leaderboard ---------------------------------------------------------------------------
+
+let boardTab: "today" | "all" = "today";
+function showBoard(onBack: () => void) {
+  const date = todayUTC();
+  const render = (body: string) => {
+    show("board", `
+      <div class="panel wide">
+        <h2>Leaderboard</h2>
+        <p class="note">Daily Challenge scores from players everywhere. Everyone gets the same arena each day (UTC).</p>
+        ${seg("boardTab", [["today", `Today · ${date}`], ["all", "All time"]], boardTab)}
+        <div class="board">${body}</div>
+        <div class="row end"><button class="btn ghost" data-back>Back</button><button class="btn" data-play>Play today's challenge</button></div>
+      </div>`, { onBack, focus: "[data-back]" });
+    wireSeg("boardTab", (v) => { boardTab = v as "today" | "all"; load(); });
+    on("[data-back]", "click", onBack);
+    on("[data-play]", "click", showDaily);
+  };
+  const row = (e: BoardEntry, i: number) => {
+    const t = `${Math.floor(e.seconds / 60)}:${String(e.seconds % 60).padStart(2, "0")}`;
+    return `<div class="board-row ${i < 3 ? "top" : ""} ${e.name === settings.nickname ? "me" : ""}"><span class="rank">${i + 1}</span><b class="name">${esc(e.name)}</b><b class="pts">${e.score}</b><span class="detail">${e.won ? "🏆 " : ""}${e.kills} KO · ${e.crates} crates · ${t}${e.date ? ` · ${e.date}` : ""}</span></div>`;
+  };
+  const load = () => {
+    render(`<p class="note">Loading…</p>`);
+    fetchBoard(boardTab === "today" ? { date } : { all: true })
+      .then((list) => { if (current === "board") render(list.length ? list.map(row).join("") : `<p class="note">No scores yet${boardTab === "today" ? " today. Be the first!" : "."}</p>`); })
+      .catch((err: Error) => { if (current === "board") render(`<p class="error">${esc(err.message)}</p>`); });
+  };
+  load();
 }
 
 // daily challenge ----------------------------------------------------------------------------
@@ -504,10 +567,11 @@ function showDaily() {
         <li>One round against three Normal bots.</li>
         <li>Points: survival time, crates you blast, power-ups, knockouts (150 each) and a big bonus for winning, more if you win quickly.</li>
       </ul>
-      <p class="note">Today's best on this device: <b>${best ? `${best.score} pts` : "not played yet"}</b>${ever ? ` · All-time best: <b>${ever.score}</b> (${ever.date})` : ""}<br>Scores are kept on this device only.</p>
-      <div class="row end"><button class="btn ghost" data-back>Back</button><button class="btn" data-start>Play today's challenge</button></div>
+      <p class="note">Your best today: <b>${best ? `${best.score} pts` : "not played yet"}</b>${ever ? ` · Your best ever: <b>${ever.score}</b> (${ever.date})` : ""}<br>After playing you can put your score on the public leaderboard.</p>
+      <div class="row end"><button class="btn ghost" data-back>Back</button><button class="btn alt" data-board>Leaderboard</button><button class="btn" data-start>Play today's challenge</button></div>
     </div>`, { onBack: showTitle, focus: "[data-start]" });
   on("[data-back]", "click", showTitle);
+  on("[data-board]", "click", () => showBoard(showDaily));
   on("[data-start]", "click", () => {
     const me = new InputSource();
     const slots: Slot[] = [{ kind: "human", name: CHARACTERS[0].name, source: me, label: "YOU" }];
@@ -518,6 +582,7 @@ function showDaily() {
 
 function showDailyResult(m: LocalMatch, s: GameState) {
   if (!inMatch) return;
+  notePlayedMatch();
   keyboard.active = false;
   const date = todayUTC();
   const d = m.dailyStats;
@@ -541,16 +606,41 @@ function showDailyResult(m: LocalMatch, s: GameState) {
         <div class="result-row"><span></span><span>Crates blasted</span><b>${d.crates}</b><span></span></div>
         <div class="result-row"><span></span><span>Knockouts</span><b>${d.kills}</b><span></span></div>
       </div>
+      <div class="row submit-row">
+        <input type="text" id="lbName" maxlength="16" autocomplete="nickname" placeholder="Your name" value="${esc(settings.nickname)}" aria-label="Your name for the leaderboard">
+        <button class="btn small" data-submit>Add to leaderboard</button>
+      </div>
+      <div class="note" id="lbStatus" role="status"></div>
       <div class="menu two">
-        <button class="btn" data-copy>Copy result</button>
+        <button class="btn alt" data-copy>Copy result</button>
         <button class="btn alt" data-again>Try again</button>
       </div>
       <button class="btn ghost small" data-menu style="margin-top:10px;width:100%">Main menu</button>
+      ${shareRow(`I scored ${score} in today's Blast Borough Daily Challenge (${date}). Can you beat it?`, { label: "Challenge friends" })}
+      ${credit()}
     </div>`, { onBack: leaveMatch, focus: "[data-copy]" });
   on("[data-copy]", "click", async () => {
     try { await navigator.clipboard.writeText(summary); toast("Result copied: paste it to your friends!"); }
     catch { prompt("Copy your result:", summary); }
   });
+  on("[data-submit]", "click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    const name = screens.querySelector<HTMLInputElement>("#lbName")!.value.trim();
+    const status = screens.querySelector<HTMLElement>("#lbStatus")!;
+    if (name.length < 2) { status.textContent = "Type a name first (2 to 16 letters)."; return; }
+    settings.nickname = name; saveSettings();
+    btn.disabled = true;
+    status.textContent = "Sending…";
+    try {
+      const r = await submitDaily({ name, date, won: d.won, kills: d.kills, crates: d.crates, pickups: d.pickups, seconds, score });
+      status.innerHTML = `${r.best ? "On the board!" : `Your best today is still ${r.score}.`} You're <b>#${r.rank}</b> today. <a href="#" data-view>See the leaderboard</a>`;
+      status.querySelector("[data-view]")!.addEventListener("click", (ev) => { ev.preventDefault(); showBoard(leaveMatch); });
+    } catch (err) {
+      btn.disabled = false;
+      status.textContent = (err as Error).message;
+    }
+  });
+  screens.querySelector("#lbName")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") screens.querySelector<HTMLButtonElement>("[data-submit]")?.click(); });
   on("[data-again]", "click", () => { m.restart(); keyboard.active = true; show("none", ""); });
   on("[data-menu]", "click", leaveMatch);
 }
