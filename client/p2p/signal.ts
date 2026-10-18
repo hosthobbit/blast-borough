@@ -28,7 +28,7 @@ export async function signal<T = Record<string, unknown>>(body: object): Promise
 }
 
 /** Wait until the connection has gathered its network addresses (no trickle ICE: one message each way). */
-export function iceGathered(pc: RTCPeerConnection, maxMs = 3000): Promise<void> {
+export function iceGathered(pc: RTCPeerConnection, maxMs = 2000): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => { pc.removeEventListener("icegatheringstatechange", check); clearTimeout(timer); resolve(); };
