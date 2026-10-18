@@ -1,0 +1,9 @@
+{
+  "name": "Blast Borough",
+  "short_name": "Blast Borough",
+  "start_url": "./",
+  "display": "fullscreen",
+  "background_color": "#1b1430",
+  "theme_color": "#1b1430",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
