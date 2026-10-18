@@ -11,5 +11,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["server", "shared"]
+  "include": ["server", "shared"], "exclude": []
 }

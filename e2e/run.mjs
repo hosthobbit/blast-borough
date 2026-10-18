@@ -5,7 +5,12 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { launch, sleep, watchConsole } from "./browser.mjs";
 
-const SERVER_PORT = 8790, WEB_PORT = 5180;
+import { mkdtempSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
+import { join } from "node:path";
+
+const SERVER_PORT = 8790, WEB_PORT = 5180, SIGNAL_PORT = 8793;
+const PHP = process.env.PHP_BIN || join(homedir(), ".local/opt/php/php");
 const BASE = `http://localhost:${WEB_PORT}/`;
 const OUT = "e2e/out";
 mkdirSync(OUT, { recursive: true });
@@ -30,6 +35,9 @@ async function scenario(name, fn) {
     await fn();
     results.push([name, "PASS", `${Math.round((Date.now() - t0) / 1000)}s`]);
   } catch (e) {
+    let i = 0;
+    for (const ctx of browser.contexts()) for (const pg of ctx.pages()) await pg.screenshot({ path: `${OUT}/FAIL_${name}_${i++}.png` }).catch(() => {});
+    console.log(`[${name}]`, e.message.split("\n").slice(0, 3).join(" | "));
     results.push([name, "FAIL", e.message.split("\n")[0]]);
   }
 }
@@ -41,8 +49,11 @@ const state = (page) => page.evaluate(() => {
 });
 const screen = (page) => page.evaluate(() => window.__bb.screen());
 
+// online play is peer-to-peer: browsers find each other through signal/blast-signal.php (PHP)
+const signalDir = mkdtempSync(join(tmpdir(), "bb-signal-"));
+const signalServer = await start(PHP, ["-S", `127.0.0.1:${SIGNAL_PORT}`, "-t", "signal"], { BLAST_SIGNAL_DIR: signalDir }, /Development Server|started/);
 const server = await start("npx", ["tsx", "server/index.ts"], { PORT: String(SERVER_PORT) }, /listening/);
-const vite = await start("npx", ["vite", "--port", String(WEB_PORT), "--strictPort"], { VITE_SERVER_URL: `ws://localhost:${SERVER_PORT}` }, /Local:/);
+const vite = await start("npx", ["vite", "--port", String(WEB_PORT), "--strictPort"], { VITE_SIGNAL_URL: `http://127.0.0.1:${SIGNAL_PORT}/blast-signal.php`, VITE_SERVER_URL: "" }, /Local:/);
 const browser = await launch();
 
 async function newPage(label, opts = {}) {
@@ -110,7 +121,8 @@ try {
     await page.context().close();
   });
 
-  // 3. online: two browsers, create + invite link + ready + bots + start, complete a round; then a disconnect
+  // 3. online (peer-to-peer over WebRTC): two browsers, create + invite link + ready + bots + start,
+  //    complete a round; then the guest disconnects and a bot takes over
   await scenario("online", async () => {
     const a = await newPage("online-A");
     const b = await newPage("online-B");
@@ -165,19 +177,45 @@ try {
     await a.context().close();
   });
 
+  // 3b. the host leaves: guests are told the room has closed
+  await scenario("host-leaves", async () => {
+    const a = await newPage("hostleave-A");
+    const b = await newPage("hostleave-B");
+    await a.goto(BASE);
+    await a.waitForFunction(() => window.__bb?.screen() === "title");
+    await a.click("text=Online Multiplayer");
+    await a.fill("#nick", "Hana");
+    await a.click("[data-create]");
+    await a.waitForSelector(".room-code");
+    const code = (await a.textContent(".room-code")).trim();
+    await b.goto(`${BASE}?room=${code}`);
+    await b.waitForFunction(() => window.__bb?.screen() === "title");
+    await b.click("text=Online Multiplayer");
+    await b.fill("#nick", "Ben");
+    await b.click("[data-join]");
+    await b.waitForSelector("[data-ready]");
+    await a.context().close();
+    await b.waitForFunction(() => /host has left/.test(document.querySelector(".error")?.textContent ?? ""), null, { timeout: 20000 });
+    await b.context().close();
+  });
+
   // 4. failed connection is reported clearly
   await scenario("offline", async () => {
     const page = await newPage("offline");
     await page.goto(BASE);
     await page.evaluate(() => {}); // page ready
     await page.waitForFunction(() => window.__bb?.screen() === "title");
-    await page.route("**/*", (r) => r.continue());
-    // point the client at a port nobody listens on by joining through a bad server URL
-    await page.evaluate(() => { window.WebSocket = class extends window.WebSocket { constructor() { super("ws://127.0.0.1:9"); } }; });
+    // the room service is unreachable
+    await page.route("**/blast-signal.php", (r) => r.abort());
     await page.click("text=Online Multiplayer");
     await page.fill("#nick", "Nobody");
     await page.click("[data-create]");
-    await page.waitForFunction(() => /Couldn't reach the game server/.test(document.querySelector(".error")?.textContent ?? ""), null, { timeout: 15000 });
+    await page.waitForFunction(() => /Couldn't reach the room service/.test(document.querySelector(".error")?.textContent ?? ""), null, { timeout: 15000 });
+    // a code that doesn't exist
+    await page.unroute("**/blast-signal.php");
+    await page.fill("#code", "ZZZZZ");
+    await page.click("[data-join]");
+    await page.waitForFunction(() => /No room with that code/.test(document.querySelector(".error")?.textContent ?? ""), null, { timeout: 15000 });
     await page.context().close();
   });
 
@@ -262,10 +300,11 @@ try {
   await browser.close();
   server.kill();
   vite.kill();
+  signalServer.kill();
 }
 
 // the offline scenario connects to a dead port on purpose
-const errors = allErrors.flatMap((e) => e.list).filter((e) => !/favicon|DevTools/.test(e) && !/^\[offline\] WebSocket connection/.test(e));
+const errors = allErrors.flatMap((e) => e.list).filter((e) => !/favicon|DevTools/.test(e) && !/^\[offline\] (WebSocket connection|Failed to load resource)/.test(e));
 console.log("\nEnd-to-end results");
 for (const [n, r, d] of results) console.log(`  ${r === "PASS" ? "✓" : "✗"} ${n.padEnd(15)} ${r}  ${d}`);
 console.log(`  console errors: ${errors.length}`);

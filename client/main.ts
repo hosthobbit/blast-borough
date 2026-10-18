@@ -9,6 +9,13 @@ import { CHARACTERS, drawCharacter, drawPowerUp } from "./game/art.js";
 import { LocalMatch, type Slot, dailyScore, todayUTC } from "./game/localMatch.js";
 import { InputSource, KEYS_P1_LOCAL, KEYS_P1_SOLO, KEYS_P2_LOCAL, attachTouchControls, keyboard } from "./input.js";
 import { OnlineSession } from "./net.js";
+import { joinHost } from "./p2p/guest.js";
+import { P2PHost } from "./p2p/host.js";
+import { webSocketTransport } from "./p2p/transport.js";
+
+/** A dedicated server if one is configured at build time; otherwise rooms are hosted in a player's browser. */
+const SERVER_URL = import.meta.env.VITE_SERVER_URL as string | undefined;
+let p2pHost: P2PHost | null = null;
 import { saveSettings, settings, storageGet, storageSet } from "./settings.js";
 
 // ------------------------------------------------------------------------------------------
@@ -527,7 +534,7 @@ function showDailyResult(m: LocalMatch, s: GameState) {
   show("results", `
     <div class="panel">
       <h2>Daily Challenge · ${date}</h2>
-      <div class="winner-hero"><img src="${portrait(d.won ? 0 : Math.max(0, s.winner))}" alt=""><h2>${d.won ? "You won!" : s.draw ? "A draw!" : "Knocked out!"}</h2></div>
+      <div class="winner-hero"><img src="${portrait(0)}" alt=""><h2>${d.won ? "You won!" : s.draw ? "A draw!" : "Knocked out!"}</h2></div>
       <div class="results">
         <div class="result-row win"><span></span><b>Score</b><b>${score}</b><span>${newBest ? "New best!" : `Best ${prev!.score}`}</span></div>
         <div class="result-row"><span></span><span>Survived</span><b>${mmss}</b><span></span></div>
@@ -565,7 +572,7 @@ function showOnline(error = "") {
         <div class="row"><input type="text" id="code" maxlength="5" placeholder="CODE" value="${esc(invite)}" aria-label="Room code" style="flex:1;text-transform:uppercase;letter-spacing:0.2em;text-align:center"><button class="btn alt" data-join>Join</button></div>
       </div>
       <div class="error" role="alert">${esc(error)}</div>
-      <p class="note">Online play needs the Blast Borough server running (see README). Server: <code>${esc(OnlineSession.serverUrl())}</code></p>
+      <p class="note">${SERVER_URL ? `Server: <code>${esc(SERVER_URL)}</code>` : "Whoever creates the room hosts the game in their browser: keep this tab open until the match is over. Friends connect to you directly."}</p>
       <div class="row end"><button class="btn ghost" data-back>Back</button></div>
     </div>`, { onBack: showTitle, focus: invite ? "#nick" : "#nick" });
   const nick = screens.querySelector<HTMLInputElement>("#nick")!;
@@ -592,8 +599,15 @@ function showOnline(error = "") {
 
 function connect(first: { t: "create"; name: string } | { t: "join"; name: string; code: string }) {
   online?.leave();
-  show("lobby", `<div class="panel"><h2>Connecting…</h2><p><span class="conn wait">Connecting to the server</span></p><div class="row end"><button class="btn ghost" data-back>Cancel</button></div></div>`, { onBack: () => { online?.leave(); online = null; showOnline(); } });
+  const what = SERVER_URL ? "Connecting to the server" : first.t === "create" ? "Setting up your room" : "Connecting to the host";
+  show("lobby", `<div class="panel"><h2>Connecting…</h2><p><span class="conn wait">${what}…</span></p><div class="row end"><button class="btn ghost" data-back>Cancel</button></div></div>`, { onBack: () => { online?.leave(); online = null; showOnline(); } });
   on("[data-back]", "click", () => { online?.leave(); online = null; showOnline(); });
+  p2pHost?.stop();
+  p2pHost = null;
+  let connectFn;
+  if (SERVER_URL) connectFn = () => webSocketTransport(SERVER_URL);
+  else if (first.t === "create") { const host = new P2PHost(); p2pHost = host; connectFn = () => host.start(); }
+  else { const code = first.code; connectFn = () => joinHost(code); }
   const session = new OnlineSession(first, {
     lobby: () => { if (!inMatch || current === "results") showLobby(); },
     match: () => startOnlineMatch(),
@@ -607,7 +621,7 @@ function connect(first: { t: "create"; name: string } | { t: "join"; name: strin
       showOnline(msg);
     },
     notice: (msg) => toast(msg),
-  });
+  }, connectFn);
   online = session;
 }
 
@@ -623,6 +637,7 @@ function showLobby() {
   const allReady = L.players.filter((p) => p.connected && !p.host).every((p) => p.ready);
   const canStart = host && total >= 2 && allReady;
   const link = `${location.origin}${location.pathname}?room=${L.code}`;
+  if (p2pHost) p2pHost.slowPoll = false;
   show("lobby", `
     <div class="panel">
       <div class="row"><h2 style="flex:1">Room</h2><span class="conn ${online.connClass()}">${online.connText()}</span></div>
@@ -635,6 +650,7 @@ function showLobby() {
       ${host ? `<div class="row"><label class="field">Bots</label>${seg("obots", Array.from({ length: Math.max(0, L.max - L.players.length) + 1 }, (_, i) => [String(i), String(i)] as [string, string]).slice(0, 8), String(L.bots))}</div>
         <div class="row" style="margin-top:8px"><label class="field">Bot difficulty</label>${seg("odiff", [["easy", "Easy"], ["normal", "Normal"], ["hard", "Hard"]], L.difficulty)}</div>` : ""}
       <p class="note">${isTouch ? "Steer with the pad, tap BOMB to drop a bomb." : "Move with WASD or the arrow keys, Space drops a bomb."} First to ${WINS_TO_TAKE_MATCH} round wins.</p>
+      ${p2pHost ? `<p class="note"><b>You're hosting:</b> the game runs in this browser, so keep this tab open until you're done.</p>` : ""}
       <p class="note">${host ? (canStart ? "Everyone's ready." : total < 2 ? "Waiting for at least one more player (or add a bot)." : "Waiting for everyone to be ready.") : "Waiting for the host to start."}</p>
       <div class="row end">
         <button class="btn ghost" data-leave>Leave</button>
@@ -663,6 +679,7 @@ function startOnlineMatch() {
   countdownShown = -1;
   enterMatchUi();
   const o = online;
+  if (p2pHost) p2pHost.slowPoll = true;
   setDriver({ advance: (dt) => o.advance(dt), frame: () => o.frame() });
 }
 

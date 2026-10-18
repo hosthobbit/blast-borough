@@ -3,9 +3,9 @@
 
 import { createServer as createHttpServer, type Server } from "node:http";
 import { WebSocketServer, type RawData } from "ws";
-import { MAX_MESSAGE_BYTES, parseClientMsg } from "../shared/protocol.js";
+import { MAX_MESSAGE_BYTES } from "../shared/protocol.js";
 import { TICK_MS } from "../shared/constants.js";
-import { ABUSE_LIMIT, Lobby, Member, type Room, type ServerOptions } from "./rooms.js";
+import { Lobby, type ServerOptions, handleConnection } from "../shared/rooms.js";
 
 export interface RunningServer { port: number; close(): Promise<void>; lobby: Lobby; http: Server }
 
@@ -36,8 +36,8 @@ export function startServer(opts: Partial<ServerOptions> & { port?: number; allo
   });
 
   wss.on("connection", (ws) => {
-    let member: Member | null = null;
-    let room: Room | null = null;
+    const conn = { send: (t: string) => ws.send(t), isOpen: () => ws.readyState === ws.OPEN, close: () => ws.close() };
+    const handler = handleConnection(lobby, conn);
     let alive = true;
     ws.on("pong", () => { alive = true; });
     const heartbeat = setInterval(() => {
@@ -45,43 +45,11 @@ export function startServer(opts: Partial<ServerOptions> & { port?: number; allo
       alive = false;
       ws.ping();
     }, 15000);
-
-    const fail = (code: string, message: string) => ws.send(JSON.stringify({ t: "error", code, message }));
-
     ws.on("message", (data: RawData, isBinary: boolean) => {
       if (isBinary) return;
-      const text = Array.isArray(data) ? Buffer.concat(data).toString("utf8") : data.toString();
-      if (member && !member.allow()) {
-        if (member.dropped > ABUSE_LIMIT) { fail("rate_limit", "Too many messages."); ws.close(); }
-        return;
-      }
-      const msg = parseClientMsg(text);
-      if (!msg) { fail("bad_message", "That message wasn't understood."); return; }
-      if (msg.t === "ping") { ws.send(JSON.stringify({ t: "pong", time: msg.time })); return; }
-      if (msg.t === "create" || msg.t === "join") {
-        if (member) { fail("already_in_room", "You're already in a room."); return; }
-        if (msg.t === "create") {
-          room = lobby.create();
-          if (!room) { fail("server_full", "The server is full right now. Try again soon."); return; }
-        } else {
-          room = lobby.rooms.get(msg.code) ?? null;
-          if (!room) { fail("room_not_found", `No room called ${msg.code}. Check the code?`); return; }
-        }
-        const m = new Member(ws, msg.name);
-        const problem = room.add(m);
-        if (problem) { fail("cannot_join", problem); room = null; return; }
-        member = m;
-        return;
-      }
-      if (!member || !room) { fail("not_in_room", "Create or join a room first."); return; }
-      if (msg.t === "leave") { room.remove(member, "left"); room = null; member = null; return; }
-      room.handle(member, msg);
+      handler.message(Array.isArray(data) ? Buffer.concat(data).toString("utf8") : data.toString());
     });
-
-    ws.on("close", () => {
-      clearInterval(heartbeat);
-      if (member && room) room.remove(member, "disconnected");
-    });
+    ws.on("close", () => { clearInterval(heartbeat); handler.close(); });
     ws.on("error", () => { /* close follows */ });
   });
 

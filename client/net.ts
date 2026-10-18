@@ -8,6 +8,7 @@ import { type ClientMsg, type LobbyPlayer, PROTOCOL_VERSION, type ServerMsg, typ
 import { type GameEvent, type GameState, type MatchScore, movePlayer } from "../shared/sim.js";
 import type { Frame } from "./game/ArenaScene.js";
 import type { InputSource } from "./input.js";
+import type { Transport } from "./p2p/transport.js";
 
 interface Hooks {
   lobby(): void;
@@ -21,14 +22,7 @@ interface Hooks {
 }
 
 export class OnlineSession {
-  static serverUrl(): string {
-    const env = import.meta.env.VITE_SERVER_URL as string | undefined;
-    if (env) return env;
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${location.hostname || "localhost"}:8787`;
-  }
-
-  private ws: WebSocket;
+  private t: Transport | null = null;
   private status: "connecting" | "open" | "closed" = "connecting";
   you = "";
   code = "";
@@ -51,44 +45,38 @@ export class OnlineSession {
   private pingTimer: number;
   private closedByUs = false;
 
-  constructor(first: { t: "create"; name: string } | { t: "join"; name: string; code: string }, private hooks: Hooks) {
-    try {
-      this.ws = new WebSocket(OnlineSession.serverUrl());
-    } catch {
-      this.ws = null as unknown as WebSocket;
-      setTimeout(() => hooks.error("That server address isn't valid. Check VITE_SERVER_URL."), 0);
-      this.pingTimer = 0;
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      if (this.status === "connecting") { this.closedByUs = true; this.ws.close(); hooks.error("Couldn't reach the game server. Is it running? (see README)"); }
-    }, 7000);
-    this.ws.onopen = () => {
-      clearTimeout(timeout);
+  constructor(first: { t: "create"; name: string } | { t: "join"; name: string; code: string }, private hooks: Hooks, connect: () => Promise<Transport>) {
+    connect().then((t) => {
+      if (this.closedByUs) { t.close(); return; }
+      this.t = t;
       this.status = "open";
+      t.onmessage = (d) => this.onMessage(d);
+      t.onclose = () => {
+        if (this.status === "closed") return;
+        this.status = "closed";
+        if (this.closedByUs) return;
+        hooks.error(t.kind === "p2p-guest" ? "The host has left, so the room has closed." : "Lost connection to the server.");
+      };
       this.send({ ...first, v: PROTOCOL_VERSION } as ClientMsg);
-    };
-    this.ws.onmessage = (e) => this.onMessage(e.data);
-    this.ws.onclose = () => {
-      clearTimeout(timeout);
-      const was = this.status;
+    }).catch((e: Error) => {
       this.status = "closed";
-      if (this.closedByUs) return;
-      hooks.error(was === "connecting" ? "Couldn't reach the game server. Is it running? (see README)" : "Lost connection to the server.");
-    };
-    this.ws.onerror = () => { /* onclose follows with the details */ };
+      if (!this.closedByUs) hooks.error(e.message || "Couldn't connect.");
+    });
     this.pingTimer = window.setInterval(() => this.send({ t: "ping", time: performance.now() }), 2000);
   }
 
+  get kind() { return this.t?.kind ?? null; }
+
   send(m: ClientMsg): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
+    if (this.t && this.status === "open") this.t.send(JSON.stringify(m));
   }
 
   leave(): void {
     this.closedByUs = true;
     this.send({ t: "leave" });
     clearInterval(this.pingTimer);
-    try { this.ws?.close(); } catch { /* ignore */ }
+    this.status = "closed";
+    try { this.t?.close(); } catch { /* ignore */ }
   }
 
   isHost(): boolean {
